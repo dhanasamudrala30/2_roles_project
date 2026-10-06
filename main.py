@@ -15,6 +15,16 @@ fastapi_obj=FastAPI() # creating fastapi object
 supabase_obj=create_client(SUPABASE_URL,SUPABASE_KEY)
 
 
+
+@fastapi_obj.delete("/deleteCourse/{c_id}")
+def courseDelete(c_id:str):
+    res_from_supabase_after_c_delete=supabase_obj.table("courses").delete().eq("id",c_id).execute()
+    print(res_from_supabase_after_c_delete.data[0])
+    return {
+        "msg":f"{res_from_supabase_after_c_delete.data[0]["course_name"]} course deleted successfully"
+    }
+
+
 @fastapi_obj.get("/get_my_courses")
 def get_my_courses_fun(t_id:str):
     res=supabase_obj.table("courses").select("*").eq("trainer_id",t_id).execute()
