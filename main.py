@@ -11,10 +11,151 @@ SUPABASE_KEY="sb_publishable_TNvD8HGn8lC8CGpyuHkU5A_Y3XXcYQR"
 
 from fastapi import FastAPI # importing FastAPI class
 from supabase import create_client
+import traceback
+from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 fastapi_obj=FastAPI() # creating fastapi object
 supabase_obj=create_client(SUPABASE_URL,SUPABASE_KEY)
 
 
+
+@fastapi_obj.get("/my_enrolled_courses")
+def get_my_enrolled_courses(student_id: str):
+    try:
+        enrollment_response = (
+            supabase_obj.table("enrollments")
+            .select("course_id, status, enrolled_at")
+            .eq("student_id", student_id)
+            .eq("status", "active")
+            .execute()
+        )
+
+        enrollments = enrollment_response.data
+
+        if not enrollments:
+            return {
+                "msg": "No enrolled courses found",
+                "data": []
+            }
+
+        course_ids = [
+            enrollment["course_id"]
+            for enrollment in enrollments
+        ]
+
+        courses_response = (
+            supabase_obj.table("courses")
+            .select("*")
+            .in_("id", course_ids)
+            .execute()
+        )
+
+        return {
+            "msg": "Enrolled courses retrieved successfully",
+            "data": courses_response.data
+        }
+
+    except Exception as error:
+        print("MY COURSES ERROR:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to retrieve enrolled courses"
+        )
+
+
+@fastapi_obj.post("/enroll_course")
+def enroll_course(enrollment: dict):
+    student_id = enrollment.get("student_id")
+    course_id = enrollment.get("course_id")
+
+    if not student_id or not course_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Student ID and Course ID are required."
+        )
+
+    try:
+        # Verify that the course exists and is published
+        course_response = (
+            supabase_obj.table("courses")
+            .select("id, course_name")
+            .eq("id", course_id)
+            .eq("status", "published")
+            .execute()
+        )
+
+        if not course_response.data:
+            raise HTTPException(
+                status_code=404,
+                detail="Published course not found."
+            )
+
+        # Check whether the student is already enrolled
+        existing = (
+            supabase_obj.table("enrollments")
+            .select("id")
+            .eq("student_id", student_id)
+            .eq("course_id", course_id)
+            .execute()
+        )
+
+        if existing.data:
+            raise HTTPException(
+                status_code=409,
+                detail="You are already enrolled in this course."
+            )
+
+        # Create the enrollment
+        result = (
+            supabase_obj.table("enrollments")
+            .insert({
+                "student_id": student_id,
+                "course_id": course_id,
+                "status": "active"
+            })
+            .execute()
+        )
+
+        if not result.data:
+            raise HTTPException(
+                status_code=500,
+                detail="Enrollment was not saved."
+            )
+
+        return {
+            "msg": "Course enrollment successful.",
+            "data": result.data[0]
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as error:
+
+        print("\n========== ENROLLMENT ERROR ==========")
+        traceback.print_exc()
+        print("======================================\n")
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(error)
+        )
+
+
+
+@fastapi_obj.get("/get_published_courses")
+def get_published_courses():
+    response = (
+        supabase_obj.table("courses")
+        .select("*")
+        .eq("status", "published")
+        .execute()
+    )
+
+    return {
+        "msg": "Published courses retrieved successfully",
+        "data": response.data
+    }
 
 @fastapi_obj.delete("/deleteCourse/{c_id}")
 def courseDelete(c_id:str):
