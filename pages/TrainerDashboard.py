@@ -134,6 +134,24 @@ def fetch_courses():
     response.raise_for_status()
     return response.json().get("data", [])
 
+def fetch_trainer_analytics():
+    response = requests.get(
+        f"{API_URL}/trainer_analytics",
+        params={"t_id": trainer_id},
+        timeout=10
+    )
+    response.raise_for_status()
+    return response.json().get("data", {})
+
+
+def fetch_course_enrollments():
+    response = requests.get(
+        f"{API_URL}/trainer_course_enrollments",
+        params={"t_id": trainer_id},
+        timeout=10
+    )
+    response.raise_for_status()
+    return response.json().get("data", [])
 
 def fetch_modules(course_id):
     response = requests.get(
@@ -204,6 +222,74 @@ published_courses = sum(
     if course.get("status") == "published"
 )
 draft_courses = total_courses - published_courses
+
+try:
+    analytics = fetch_trainer_analytics()
+    analytics_loaded = True
+except requests.RequestException as error:
+    analytics = {}
+    analytics_loaded = False
+    st.warning(f"Unable to load trainer analytics: {error}")
+
+
+st.markdown("### 📈 Training Analytics")
+
+analytics1, analytics2, analytics3 = st.columns(3)
+
+with analytics1:
+    st.metric(
+        "👥 Total Students",
+        analytics.get("total_students", 0) if analytics_loaded else "—"
+    )
+
+with analytics2:
+    st.metric(
+        "📚 Total Lessons",
+        analytics.get("total_lessons", 0) if analytics_loaded else "—"
+    )
+
+with analytics3:
+    st.metric(
+        "✅ Completed Lessons",
+        analytics.get("completed_lessons", 0) if analytics_loaded else "—"
+    )
+
+analytics4, analytics5 = st.columns(2)
+
+with analytics4:
+    st.metric(
+        "⏳ Pending Progress Records",
+        analytics.get("pending_lessons", 0) if analytics_loaded else "—"
+    )
+
+with analytics5:
+    st.metric(
+        "📊 Completion Rate",
+        f"{analytics.get('completion_rate', 0)}%" if analytics_loaded else "—"
+    )
+
+
+st.divider()
+st.markdown(" 📊 Course-wise Student Enrollments")
+st.caption("Compare the number of active students enrolled in each course.")
+
+try:
+    enrollment_data = fetch_course_enrollments()
+
+    if enrollment_data:
+        import pandas as pd
+
+        enrollment_df = pd.DataFrame(enrollment_data)
+
+        st.bar_chart(
+            enrollment_df.set_index("course_name")["total_students"],
+            use_container_width=True
+        )
+    else:
+        st.info("No course enrollment data available yet.")
+
+except requests.RequestException as error:
+    st.warning(f"Unable to load enrollment chart: {error}")
 
 metric1, metric2, metric3 = st.columns(3)
 
@@ -648,6 +734,7 @@ if st.session_state["manage_modules_status"]:
             st.caption(str(error))
 
 
+
 # MANAGE LESSONS
 st.markdown("""
 <style>
@@ -682,22 +769,6 @@ st.markdown("""
     letter-spacing: 1px;
     margin-bottom: 8px;
 }
-.lesson-item {
-    padding: 15px;
-    border: 1px solid rgba(128,128,128,0.25);
-    border-radius: 12px;
-    margin-bottom: 10px;
-    background: rgba(128,128,128,0.035);
-}
-.lesson-item-title {
-    font-size: 16px;
-    font-weight: 700;
-    margin-bottom: 7px;
-}
-.lesson-item-meta {
-    color: #9CA3AF;
-    font-size: 13px;
-}
 .lesson-empty {
     padding: 28px 16px;
     border: 1px dashed #64748B;
@@ -709,7 +780,7 @@ st.markdown("""
 
 <div class="lesson-header">
     <h2>📚 Lesson Studio</h2>
-    <p>Create, organize, and manage the learning content inside your course modules.</p>
+    <p>Create, organize, and manage learning content inside your course modules.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -811,66 +882,94 @@ else:
                 unsafe_allow_html=True
             )
 
-            st.markdown("#### ✨ Create a Lesson")
+            st.markdown("#### ✨ Lesson Management")
             st.caption(
-                "Add a video, article, or learning resource to the selected module."
+                "Create and organize learning content for the selected module."
             )
 
-            with st.container(border=True):
-                with st.form("add_lesson_form", clear_on_submit=True):
-                    lesson_title = st.text_input(
-                        "Lesson Title",
-                        placeholder="e.g. Introduction to Java"
-                    )
+            if "show_lesson_form" not in st.session_state:
+                st.session_state["show_lesson_form"] = False
 
-                    lesson_description = st.text_area(
-                        "Lesson Description",
-                        placeholder="Explain the key concepts covered in this lesson.",
-                        height=100
-                    )
+            if st.button(
+                "＋ Create New Lesson",
+                key="open_lesson_form",
+                use_container_width=True,
+                type="primary"
+            ):
+                st.session_state["show_lesson_form"] = True
+                st.rerun()
 
-                    lesson_col1, lesson_col2 = st.columns(2)
+            if st.session_state["show_lesson_form"]:
+                st.markdown("#### 📝 New Lesson Details")
 
-                    with lesson_col1:
-                        lesson_type = st.selectbox(
-                            "Content Type",
-                            ["video", "article", "resource"],
-                            format_func=lambda value: {
-                                "video": "🎬 Video Lesson",
-                                "article": "📄 Article",
-                                "resource": "📎 Learning Resource"
-                            }[value]
+                with st.container(border=True):
+                    with st.form("add_lesson_form", clear_on_submit=True):
+                        lesson_title = st.text_input(
+                            "Lesson Title",
+                            placeholder="e.g. Introduction to Java"
                         )
 
-                    with lesson_col2:
-                        duration_minutes = st.number_input(
-                            "Duration (minutes)",
+                        lesson_description = st.text_area(
+                            "Lesson Description",
+                            placeholder="Explain the key concepts covered in this lesson.",
+                            height=100
+                        )
+
+                        lesson_col1, lesson_col2 = st.columns(2)
+
+                        with lesson_col1:
+                            lesson_type = st.selectbox(
+                                "Content Type",
+                                ["video", "article", "resource"],
+                                format_func=lambda value: {
+                                    "video": "🎬 Video Lesson",
+                                    "article": "📄 Article",
+                                    "resource": "📎 Learning Resource"
+                                }[value]
+                            )
+
+                        with lesson_col2:
+                            duration_minutes = st.number_input(
+                                "Duration (minutes)",
+                                min_value=1,
+                                max_value=1440,
+                                value=10,
+                                step=5
+                            )
+
+                        content_url = st.text_input(
+                            "Content URL",
+                            placeholder="https://example.com/lesson"
+                        )
+
+                        lesson_order = st.number_input(
+                            "Lesson Sequence",
                             min_value=1,
-                            max_value=1440,
-                            value=10,
-                            step=5
+                            value=1,
+                            step=1,
+                            help="Controls the order in which lessons appear."
                         )
 
-                    content_url = st.text_input(
-                        "Content URL",
-                        placeholder="https://example.com/lesson"
-                    )
+                        save_col, cancel_col = st.columns(2)
 
-                    lesson_order = st.number_input(
-                        "Lesson Sequence",
-                        min_value=1,
-                        value=1,
-                        step=1,
-                        help="Controls the order in which lessons appear."
-                    )
+                        with save_col:
+                            save_lesson = st.form_submit_button(
+                                "💾 Save Lesson",
+                                use_container_width=True,
+                                type="primary"
+                            )
 
-                    submitted = st.form_submit_button(
-                        "＋ Create Lesson",
-                        use_container_width=True,
-                        type="primary"
-                    )
+                        with cancel_col:
+                            cancel_lesson = st.form_submit_button(
+                                "✖ Cancel",
+                                use_container_width=True
+                            )
 
-                if submitted:
+                if cancel_lesson:
+                    st.session_state["show_lesson_form"] = False
+                    st.rerun()
+
+                elif save_lesson:
                     if not lesson_title.strip():
                         st.warning("Please enter a lesson title.")
 
@@ -878,7 +977,7 @@ else:
                         ("https://", "http://")
                     ):
                         st.warning(
-                            "Enter a valid URL starting with http:// or https://."
+                            "Enter a URL starting with http:// or https://."
                         )
 
                     else:
@@ -900,6 +999,7 @@ else:
                             )
 
                             if response.status_code in (200, 201):
+                                st.session_state["show_lesson_form"] = False
                                 st.success("Lesson created successfully!")
                                 st.rerun()
                             else:
@@ -907,10 +1007,13 @@ else:
                                 st.code(api_error_message(response))
 
                         except requests.RequestException as error:
-                            st.error(f"Backend connection failed: {error}")
+                            st.error(
+                                f"Backend connection failed: {error}"
+                            )
 
             st.divider()
             st.markdown("#### 📚 Lesson Library")
+            st.caption("All lessons in the selected module, ordered by sequence.")
 
             try:
                 lessons_response = requests.get(
@@ -924,7 +1027,7 @@ else:
                 lesson_count_col, duration_col = st.columns(2)
 
                 with lesson_count_col:
-                    st.metric("Total Lessons", len(lessons))
+                    st.metric("📚 Total Lessons", len(lessons))
 
                 total_duration = sum(
                     int(lesson.get("duration_minutes") or 0)
@@ -932,7 +1035,7 @@ else:
                 )
 
                 with duration_col:
-                    st.metric("Total Learning Time", f"{total_duration} min")
+                    st.metric("⏱️ Total Learning Time", f"{total_duration} min")
 
                 if lessons:
                     for index, lesson in enumerate(lessons, start=1):
@@ -941,9 +1044,9 @@ else:
                         )
 
                         type_display = {
-                            "video": "🎬 Video",
+                            "video": "🎬 Video Lesson",
                             "article": "📄 Article",
-                            "resource": "📎 Resource"
+                            "resource": "📎 Learning Resource"
                         }.get(lesson_type_value, "📚 Lesson")
 
                         with st.container(border=True):
@@ -951,7 +1054,7 @@ else:
 
                             with title_col:
                                 st.markdown(
-                                    f"**{index:02d} · "
+                                    f"**{lesson.get('lesson_order', index):02d} · "
                                     f"{lesson.get('lesson_title', 'Untitled Lesson')}**"
                                 )
 
@@ -985,11 +1088,12 @@ else:
                                 st.markdown(
                                     f"[Open lesson content ↗]({lesson_url})"
                                 )
+
                 else:
                     st.markdown("""
                     <div class="lesson-empty">
                         <h3>📖 Your lesson library is empty</h3>
-                        <p>Create your first lesson using the form above.</p>
+                        <p>Click Create New Lesson to add your first lesson.</p>
                     </div>
                     """, unsafe_allow_html=True)
 

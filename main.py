@@ -16,9 +16,8 @@ from fastapi import HTTPException
 from fastapi import FastAPI, HTTPException
 fastapi_obj=FastAPI() # creating fastapi object
 supabase_obj=create_client(SUPABASE_URL,SUPABASE_KEY)
-
-
 from pydantic import BaseModel, Field
+from datetime import datetime, timezone
 
 
 class ModuleCreate(BaseModel):
@@ -36,6 +35,100 @@ class LessonCreate(BaseModel):
     content_url: str = ""
     lesson_order: int = Field(default=1, ge=1)
     duration_minutes: int = Field(default=10, ge=1)
+
+class LessonProgressCreate(BaseModel):
+    student_id: str
+    lesson_id: str
+    is_completed: bool = True
+
+
+
+@fastapi_obj.get("/get_lesson_progress")
+def get_lesson_progress(student_id: str):
+    try:
+        result = (
+            supabase_obj.table("lesson_progress")
+            .select("*")
+            .eq("student_id", student_id)
+            .execute()
+        )
+
+        return {
+            "msg": "Lesson progress fetched successfully.",
+            "data": result.data
+        }
+
+    except Exception as error:
+        print("GET LESSON PROGRESS ERROR:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to fetch lesson progress."
+        )
+
+
+@fastapi_obj.post("/update_lesson_progress")
+def update_lesson_progress(progress: LessonProgressCreate):
+    try:
+        lesson_response = (
+            supabase_obj.table("lessons")
+            .select("id")
+            .eq("id", progress.lesson_id)
+            .execute()
+        )
+
+        if not lesson_response.data:
+            raise HTTPException(
+                status_code=404,
+                detail="Lesson not found."
+            )
+
+        existing_response = (
+            supabase_obj.table("lesson_progress")
+            .select("id")
+            .eq("student_id", progress.student_id)
+            .eq("lesson_id", progress.lesson_id)
+            .execute()
+        )
+
+        progress_data = {
+            "student_id": progress.student_id,
+            "lesson_id": progress.lesson_id,
+            "is_completed": progress.is_completed,
+            "completed_at": (
+                datetime.now(timezone.utc).isoformat()
+                if progress.is_completed
+                else None
+            )
+        }
+
+        if existing_response.data:
+            result = (
+                supabase_obj.table("lesson_progress")
+                .update(progress_data)
+                .eq("id", existing_response.data[0]["id"])
+                .execute()
+            )
+        else:
+            result = (
+                supabase_obj.table("lesson_progress")
+                .insert(progress_data)
+                .execute()
+            )
+
+        return {
+            "msg": "Lesson progress updated successfully.",
+            "data": result.data
+        }
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        print("LESSON PROGRESS ERROR:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to update lesson progress."
+        )
+
 
 # ---------------------------------------Lessons--------------------
 
@@ -442,6 +535,66 @@ def get_my_enrolled_courses(student_id: str):
         )
 
 
+@fastapi_obj.get("/trainer_course_enrollments")
+def trainer_course_enrollments_fun(t_id: str):
+    try:
+        courses_response = (
+            supabase_obj.table("courses")
+            .select("id, course_name")
+            .eq("trainer_id", t_id)
+            .execute()
+        )
+
+        courses = courses_response.data or []
+
+        if not courses:
+            return {
+                "msg": "Course enrollments retrieved successfully",
+                "data": []
+            }
+
+        course_ids = [course["id"] for course in courses]
+
+        enrollment_response = (
+            supabase_obj.table("enrollments")
+            .select("course_id, student_id")
+            .in_("course_id", course_ids)
+            .eq("status", "active")
+            .execute()
+        )
+
+        enrollments = enrollment_response.data or []
+
+        enrollment_counts = {}
+
+        for enrollment in enrollments:
+            course_id = enrollment["course_id"]
+            enrollment_counts.setdefault(course_id, set()).add(
+                enrollment["student_id"]
+            )
+
+        result = []
+
+        for course in courses:
+            course_id = course["id"]
+            result.append({
+                "course_name": course["course_name"],
+                "total_students": len(enrollment_counts.get(course_id, set()))
+            })
+
+        return {
+            "msg": "Course enrollments retrieved successfully",
+            "data": result
+        }
+
+    except Exception as error:
+        print("COURSE ENROLLMENTS ERROR:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to retrieve course enrollments."
+        )
+
+
 # -------------------- AUTHENTICATION --------------------
 
 @fastapi_obj.post("/login")
@@ -507,270 +660,121 @@ def user_registration(new_user: dict):
         )
 
 
-# @fastapi_obj.get("/get_modules")
-# def get_modules(course_id: str):
-#     try:
-#         response = (
-#             supabase_obj.table("modules")
-#             .select("*")
-#             .eq("course_id", course_id)
-#             .order("module_order")
-#             .execute()
-#         )
-#         return {"data": response.data}
-#     except Exception as error:
-#         print("GET MODULES ERROR:", repr(error))
-#         raise HTTPException(
-#             status_code=500,
-#             detail="Unable to retrieve modules."
-#         )
+@fastapi_obj.get("/trainer_analytics")
+def trainer_analytics_fun(t_id: str):
+    try:
+        courses_response = (
+            supabase_obj.table("courses")
+            .select("id")
+            .eq("trainer_id", t_id)
+            .execute()
+        )
 
+        courses = courses_response.data or []
+        course_ids = [course["id"] for course in courses]
 
-# @fastapi_obj.delete("/delete_module/{module_id}")
-# def delete_module(module_id: str):
-#     try:
-#         response = (
-#             supabase_obj.table("modules")
-#             .delete()
-#             .eq("id", module_id)
-#             .execute()
-#         )
+        if not course_ids:
+            return {
+                "msg": "Analytics retrieved successfully",
+                "data": {
+                    "total_courses": 0,
+                    "total_students": 0,
+                    "total_lessons": 0,
+                    "completed_lessons": 0,
+                    "pending_lessons": 0,
+                    "completion_rate": 0
+                }
+            }
 
-#         if not response.data:
-#             raise HTTPException(
-#                 status_code=404,
-#                 detail="Module not found."
-#             )
+        modules_response = (
+            supabase_obj.table("modules")
+            .select("id")
+            .in_("course_id", course_ids)
+            .execute()
+        )
 
-#         return {
-#             "msg": "Module deleted successfully.",
-#             "data": response.data
-#         }
+        modules = modules_response.data or []
+        module_ids = [module["id"] for module in modules]
 
-#     except HTTPException:
-#         raise
-#     except Exception as error:
-#         print("DELETE MODULE ERROR:", repr(error))
-#         raise HTTPException(
-#             status_code=500,
-#             detail="Unable to delete module."
-#         )
+        lesson_ids = []
 
+        if module_ids:
+            lessons_response = (
+                supabase_obj.table("lessons")
+                .select("id")
+                .in_("module_id", module_ids)
+                .execute()
+            )
 
+            lessons = lessons_response.data or []
+            lesson_ids = [lesson["id"] for lesson in lessons]
 
-# @fastapi_obj.get("/my_enrolled_courses")
-# def get_my_enrolled_courses(student_id: str):
-#     try:
-#         enrollment_response = (
-#             supabase_obj.table("enrollments")
-#             .select("course_id, status, enrolled_at")
-#             .eq("student_id", student_id)
-#             .eq("status", "active")
-#             .execute()
-#         )
+        enrollments_response = (
+            supabase_obj.table("enrollments")
+            .select("student_id, course_id")
+            .in_("course_id", course_ids)
+            .eq("status", "active")
+            .execute()
+        )
 
-#         enrollments = enrollment_response.data
+        enrollments = enrollments_response.data or []
 
-#         if not enrollments:
-#             return {
-#                 "msg": "No enrolled courses found",
-#                 "data": []
-#             }
+        total_students = len({
+            enrollment["student_id"]
+            for enrollment in enrollments
+        })
 
-#         course_ids = [
-#             enrollment["course_id"]
-#             for enrollment in enrollments
-#         ]
+        total_lessons = len(lesson_ids)
+        completed_lessons = 0
+        pending_lessons = 0
 
-#         courses_response = (
-#             supabase_obj.table("courses")
-#             .select("*")
-#             .in_("id", course_ids)
-#             .execute()
-#         )
+        if lesson_ids:
+            progress_response = (
+                supabase_obj.table("lesson_progress")
+                .select("lesson_id, is_completed")
+                .in_("lesson_id", lesson_ids)
+                .execute()
+            )
 
-#         return {
-#             "msg": "Enrolled courses retrieved successfully",
-#             "data": courses_response.data
-#         }
+            progress_records = progress_response.data or []
 
-#     except Exception as error:
-#         print("MY COURSES ERROR:", repr(error))
-#         raise HTTPException(
-#             status_code=500,
-#             detail="Unable to retrieve enrolled courses"
-#         )
+            completed_lessons = sum(
+                1 for record in progress_records
+                if record.get("is_completed") is True
+            )
 
+            pending_lessons = sum(
+                1 for record in progress_records
+                if record.get("is_completed") is False
+            )
 
-# @fastapi_obj.post("/enroll_course")
-# def enroll_course(enrollment: dict):
-#     student_id = enrollment.get("student_id")
-#     course_id = enrollment.get("course_id")
+        total_progress_records = (
+            completed_lessons + pending_lessons
+        )
 
-#     if not student_id or not course_id:
-#         raise HTTPException(
-#             status_code=400,
-#             detail="Student ID and Course ID are required."
-#         )
+        completion_rate = (
+            round(
+                (completed_lessons / total_progress_records) * 100,
+                2
+            )
+            if total_progress_records else 0
+        )
 
-#     try:
-#         # Verify that the course exists and is published
-#         course_response = (
-#             supabase_obj.table("courses")
-#             .select("id, course_name")
-#             .eq("id", course_id)
-#             .eq("status", "published")
-#             .execute()
-#         )
+        return {
+            "msg": "Analytics retrieved successfully",
+            "data": {
+                "total_courses": len(courses),
+                "total_students": total_students,
+                "total_lessons": total_lessons,
+                "completed_lessons": completed_lessons,
+                "pending_lessons": pending_lessons,
+                "completion_rate": completion_rate
+            }
+        }
 
-#         if not course_response.data:
-#             raise HTTPException(
-#                 status_code=404,
-#                 detail="Published course not found."
-#             )
-
-#         # Check whether the student is already enrolled
-#         existing = (
-#             supabase_obj.table("enrollments")
-#             .select("id")
-#             .eq("student_id", student_id)
-#             .eq("course_id", course_id)
-#             .execute()
-#         )
-
-#         if existing.data:
-#             raise HTTPException(
-#                 status_code=409,
-#                 detail="You are already enrolled in this course."
-#             )
-
-#         # Create the enrollment
-#         result = (
-#             supabase_obj.table("enrollments")
-#             .insert({
-#                 "student_id": student_id,
-#                 "course_id": course_id,
-#                 "status": "active"
-#             })
-#             .execute()
-#         )
-
-#         if not result.data:
-#             raise HTTPException(
-#                 status_code=500,
-#                 detail="Enrollment was not saved."
-#             )
-
-#         return {
-#             "msg": "Course enrollment successful.",
-#             "data": result.data[0]
-#         }
-
-#     except HTTPException:
-#         raise
-
-#     except Exception as error:
-
-#         print("\n========== ENROLLMENT ERROR ==========")
-#         traceback.print_exc()
-#         print("======================================\n")
-
-#         raise HTTPException(
-#             status_code=500,
-#             detail=str(error)
-#         )
-
-
-
-# @fastapi_obj.get("/get_published_courses")
-# def get_published_courses():
-#     response = (
-#         supabase_obj.table("courses")
-#         .select("*")
-#         .eq("status", "published")
-#         .execute()
-#     )
-
-#     return {
-#         "msg": "Published courses retrieved successfully",
-#         "data": response.data
-#     }
-
-# @fastapi_obj.delete("/deleteCourse/{c_id}")
-# def courseDelete(c_id:str):
-#     res_from_supabase_after_c_delete=supabase_obj.table("courses").delete().eq("id",c_id).execute()
-#     print(res_from_supabase_after_c_delete.data[0])
-#     return {
-#         "msg":f"{res_from_supabase_after_c_delete.data[0]["course_name"]} course deleted successfully"
-#     }
-
-
-# @fastapi_obj.get("/get_my_courses")
-# def get_my_courses_fun(t_id:str):
-#     res=supabase_obj.table("courses").select("*").eq("trainer_id",t_id).execute()
-#     return {
-
-# "msg":"got yr courses records",
-# "data":res.data
-#     }
-#     # select *
-# # from courses 
-# # where trainer_id = "a53738a9-3e62-4e8d-bcd4-911415f8530d"
-
-
-# @fastapi_obj.post("/add_course")
-# def add_course_fun(new_course:dict):
-#     res_from_sup=supabase_obj.table("courses").insert(new_course).execute()
-#     print(res_from_sup)
-#     return {
-#         "msg":"successfully added a new course"
-#     }
-
-
-# @fastapi_obj.post("/login")
-# def login_validation(login_cred_details:dict):
-#     print(login_cred_details)
-
-#     incoming_login_email=login_cred_details["email"]
-#     incoming_login_password=login_cred_details["password"]
-#     incoming_login_role=login_cred_details["role"]
-
-#     response = supabase_obj.table("users") \
-#     .select("id,name,email,role") \
-#     .eq("email", incoming_login_email) \
-#     .eq("password", incoming_login_password) \
-#     .eq("role", incoming_login_role) \
-#     .execute()
-
-#     print(response.data,"res from supabase after login")
-
-#     if len(response.data) == 0:
-#         return {
-#             "msg":"invalid credentials"
-#         }
-
-#     return {
-#         "msg":"login successful",
-#         "status":True,
-#         "loggedIn_user":response.data[0]
-#     }
-
-# @fastapi_obj.post("/register")
-# def user_registration(new_user:dict): # type annotation
-#     print("reg function")
-#     print(new_user)
-#     res=supabase_obj.table("users").insert(new_user).execute()
-
-#     return{
-#         "msg":"reg done successfully",
-#         "data":res.data
-#     }
-
-# # how to start be server ?
-
-# # uvicorn main:fastapi_obj --reload
-
-
-# # select *
-# # from users
-# # where email ="" and password="" and role=""
+    except Exception as error:
+        print("TRAINER ANALYTICS ERROR:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to retrieve trainer analytics."
+        )
